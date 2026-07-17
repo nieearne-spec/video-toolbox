@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1a2e">
+<title>视频工具箱</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    background: #0f0f1a; color: #eee; padding: 0 0 80px;
+    min-height: 100vh; 
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    padding: 20px 16px 16px; text-align: center;
+    position: sticky; top: 0; z-index: 50;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .header h1 { font-size: 20px; font-weight: 700; }
+  .header h1 span { background: linear-gradient(90deg, #00d2ff, #3a7bd5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .header p { font-size: 12px; color: #667; margin-top: 2px; }
+
+  /* ── Tab Bar ── */
+  .tab-bar {
+    display: flex; background: rgba(255,255,255,0.06);
+    border-radius: 12px; margin: 10px 16px 0; overflow: hidden;
+  }
+  .tab-bar .tab {
+    flex: 1; text-align: center; padding: 10px 6px;
+    font-size: 13px; font-weight: 600; color: #667;
+    cursor: pointer; transition: all 0.2s; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+  }
+  .tab-bar .tab.active { background: linear-gradient(135deg, #00d2ff, #3a7bd5); color: #fff; }
+
+  /* ── Content ── */
+  .content { padding: 16px; max-width: 480px; margin: 0 auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ── Card ── */
+  .card {
+    background: rgba(255,255,255,0.06); border-radius: 14px;
+    padding: 16px; margin-bottom: 14px;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* ── Input / Textarea ── */
+  textarea, input[type="url"], input[type="text"] {
+    width: 100%; padding: 12px 14px;
+    border: 2px solid rgba(255,255,255,0.12);
+    border-radius: 10px; background: rgba(0,0,0,0.3);
+    color: #fff; font-size: 14px; outline: none;
+    transition: border-color 0.3s; font-family: inherit;
+  }
+  textarea:focus, input:focus { border-color: #3a7bd5; }
+  textarea::placeholder, input::placeholder { color: #556; }
+  textarea { resize: vertical; min-height: 70px; }
+
+  /* ── Buttons ── */
+  .btn {
+    padding: 12px 20px; border: none; border-radius: 10px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s; display: inline-flex; align-items: center;
+    justify-content: center; gap: 6px;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn-primary { background: linear-gradient(135deg, #00d2ff, #3a7bd5); color: #fff; width: 100%; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-danger { background: linear-gradient(135deg, #f093fb, #f5576c); color: #fff; }
+  .btn-outline { background: rgba(255,255,255,0.1); color: #ccc; border: 1px solid rgba(255,255,255,0.15); }
+  .btn-sm { padding: 8px 14px; font-size: 12px; }
+  .btn-group { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-group .btn { flex: 1; }
+
+  /* ── Form Row ── */
+  .form-row { margin-bottom: 10px; }
+  .form-row label { display: block; font-size: 13px; color: #8899aa; margin-bottom: 4px; font-weight: 500; }
+  select {
+    width: 100%; padding: 10px 12px;
+    border: 2px solid rgba(255,255,255,0.12); border-radius: 10px;
+    background: rgba(0,0,0,0.3); color: #fff; font-size: 14px; outline: none;
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23889' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center;
+  }
+
+  /* ── Status ── */
+  .status { font-size: 13px; color: #8899aa; margin: 10px 0; min-height: 20px; }
+  .status.error { color: #f5576c; }
+  .status.success { color: #2ecc71; }
+  .status.info { color: #00d2ff; }
+
+  /* ── Video Info ── */
+  .v-info { margin-top: 12px; }
+  .v-info .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; }
+  .v-info .row:last-child { border: none; }
+  .v-info .label { color: #8899aa; }
+  .v-info .value { color: #fff; font-weight: 500; text-align: right; max-width: 60%; word-break: break-all; }
+  .platform-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 6px;
+    font-size: 11px; font-weight: 600;
+    background: rgba(0,210,255,0.15); color: #00d2ff;
+  }
+
+  /* ── Progress ── */
+  .progress-wrap { margin: 10px 0; display: none; }
+  .progress-wrap.active { display: block; }
+  .progress-bar { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+  .progress-bar .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #00d2ff, #3a7bd5); border-radius: 3px; transition: width 0.4s; }
+
+  /* ── Batch Result ── */
+  .batch-item { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; }
+  .batch-item:last-child { border: none; }
+  .batch-item .status-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .batch-item .ok { background: rgba(46,204,113,0.2); color: #2ecc71; }
+  .batch-item .err { background: rgba(245,87,108,0.2); color: #f5576c; }
+
+  /* ── History List ── */
+  .history-item {
+    padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .history-item:last-child { border: none; }
+  .history-item .icon { font-size: 24px; flex-shrink: 0; }
+  .history-item .info { flex: 1; min-width: 0; }
+  .history-item .info .title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-item .info .meta { font-size: 11px; color: #667; margin-top: 2px; display: flex; gap: 8px; }
+  .history-item .actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+  /* ── Video Preview ── */
+  video { width: 100%; border-radius: 10px; margin-top: 10px; max-height: 300px; background: #000; }
+
+  /* ── AI Output ── */
+  .ai-output {
+    background: rgba(0,210,255,0.05); border: 1px solid rgba(0,210,255,0.15);
+    border-radius: 10px; padding: 14px; margin-top: 10px;
+    font-size: 14px; line-height: 1.7; white-space: pre-wrap;
+    display: none; color: #ddd;
+  }
+  .ai-output.show { display: block; }
+
+  /* ── Empty State ── */
+  .empty { text-align: center; padding: 40px 20px; color: #556; }
+  .empty .big { font-size: 40px; margin-bottom: 10px; }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: rgba(0,0,0,0.85); color: #fff; padding: 10px 20px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: all 0.4s; pointer-events: none; z-index: 999;
+    max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── Spinner ── */
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── API Key Input ── */
+  .api-key-row {
+    display: flex; gap: 6px; align-items: center;
+    padding: 8px 12px; background: rgba(255,255,255,0.04);
+    border-radius: 8px; margin-bottom: 10px;
+  }
+  .api-key-row input { flex: 1; padding: 8px 10px; font-size: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: #fff; }
+  .api-key-row .toggle-key { cursor: pointer; color: #667; font-size: 16px; padding: 4px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>🎬 视频工具箱</span></h1>
+  <p>下载 · 仿写 · 创作</p>
+  <div class="tab-bar">
+    <div class="tab active" data-tab="download" onclick="switchTab('download')">⬇️ 下载</div>
+    <div class="tab" data-tab="history" onclick="switchTab('history')">📋 历史</div>
+    <div class="tab" data-tab="ai" onclick="switchTab('ai')">🤖 AI</div>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- ═══ 下载页 ═══ -->
+  <div class="page active" id="page-download">
+    <div class="card">
+      <div class="form-row">
+        <label>📎 视频链接（每行一个，支持批量）</label>
+        <textarea id="dlUrls" rows="3" placeholder="粘贴视频链接，每行一个&#10;支持抖音 / B站 / YouTube / 小红书 等"></textarea>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline btn-sm" onclick="pasteClipboard('dlUrls')">📋 粘贴</button>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('dlUrls').value=''">🗑️ 清空</button>
+      </div>
+      <div class="form-row" style="margin-top:10px">
+        <label>🎯 画质选择</label>
+        <select id="dlQuality">
+          <option value="b">🔓 最佳画质（自动）</option>
+          <option value="bestvideo[height<=2160]+bestaudio/best[height<=2160]">4K (2160p)</option>
+          <option value="bestvideo[height<=1440]+bestaudio/best[height<=1440]">2K (1440p)</option>
+          <option value="bestvideo[height<=1080]+bestaudio/best[height<=1080]">1080p 高清</option>
+          <option value="bestvideo[height<=720]+bestaudio/best[height<=720]">720p 流畅</option>
+          <option value="worst">💨 省流</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="dlBtn" onclick="startDownload()">⬇️ 解析并下载</button>
+    </div>
+
+    <div class="status" id="dlStatus">粘贴链接，点击下载</div>
+    <div class="progress-wrap" id="dlProgress"><div class="progress-bar"><div class="fill" id="dlProgressFill"></div></div></div>
+
+    <div id="dlResult"></div>
+    <div id="dlBatchResult"></div>
+  </div>
+
+  <!-- ═══ 历史页 ═══ -->
+  <div class="page" id="page-history">
+    <div id="historyList"></div>
+  </div>
+
+  <!-- ═══ AI 页 ═══ -->
+  <div class="page" id="page-ai">
+    <div class="card">
+      <div class="api-key-row">
+        <span style="font-size:13px;color:#8899aa">🔑</span>
+        <input type="password" id="aiApiKey" placeholder="API Key（不填则用服务端配置）">
+        <span class="toggle-key" onclick="toggleKeyVis()">👁️</span>
+      </div>
+      <div class="api-key-row">
+        <span style="font-size:13px;color:#8899aa">🌐</span>
+        <input type="text" id="aiBaseUrl" value="https://apihub.agnes-ai.com/v1" placeholder="API Base URL" style="font-size:11px">
+      </div>
+      <div class="api-key-row">
+        <span style="font-size:13px;color:#8899aa">🤖</span>
+        <input type="text" id="aiModel" value="agnes-2.0-flash" placeholder="模型名称" style="font-size:12px">
+      </div>
+
+      <div class="form-row">
+        <label>📺 选择已下载的视频</label>
+        <select id="aiVideoSelect"><option value="">— 暂无视频，先去下载 —</option></select>
+      </div>
+      <div class="form-row">
+        <label>🎭 语气风格</label>
+        <select id="aiStyle">
+          <option value="正式">正式</option>
+          <option value="幽默">幽默风趣</option>
+          <option value="营销">营销种草</option>
+          <option value="接地气">接地气</option>
+          <option value="讲故事">讲故事</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>📏 字数</label>
+        <select id="aiLength">
+          <option value="短">短（100字以内）</option>
+          <option value="中等" selected>中等（200-300字）</option>
+          <option value="长">长（500字以上）</option>
+        </select>
+      </div>
+
+      <div id="aiActions" style="display:none">
+        <div class="btn-group">
+          <button class="btn btn-primary btn-sm" onclick="aiAction('transcribe')">🎤 提取文案</button>
+        </div>
+        <div class="form-row" style="margin-top:10px">
+          <label>✏️ 文案编辑（可手动修改）</label>
+          <textarea id="aiText" rows="4" placeholder="提取文案后会自动填入，也可以手动输入"></textarea>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary btn-sm" onclick="aiAction('rewrite')">✍️ AI 仿写文案</button>
+          <button class="btn btn-danger btn-sm" onclick="aiAction('generate')">🎬 生成新脚本</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="status" id="aiStatus">选择一个已下载的视频开始</div>
+    <div class="progress-wrap" id="aiProgress"><div class="progress-bar"><div class="fill" id="aiProgressFill"></div></div></div>
+    <div class="ai-output" id="aiOutput"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ──
+let currentInfo = null;
+let currentBatch = [];
+
+// ── Toast ──
+function toast(msg, t=2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'), t);
+}
+
+// ── Tab ──
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active', p.id==='page-'+name));
+  if (name==='history') loadHistory();
+  if (name==='ai') loadAiVideoList();
+}
+
+// ── Clipboard ──
+async function pasteClipboard(id) {
+  try {
+    const text = await navigator.clipboard.readText();
+    document.getElementById(id).value = text;
+    toast('已粘贴');
+  } catch { toast('无法读取剪贴板'); }
+}
+
+// ── Toggle API Key visibility ──
+function toggleKeyVis() {
+  const inp = document.getElementById('aiApiKey');
+  inp.type = inp.type==='password' ? 'text' : 'password';
+}
+
+// ── Format size ──
+function fmtSize(b) {
+  if (!b) return '';
+  if (b<1024) return b+'B';
+  if (b<1024*1024) return (b/1024).toFixed(1)+'KB';
+  return (b/1024/1024).toFixed(1)+'MB';
+}
+
+// ═══ 下载功能 ═══
+async function startDownload() {
+  const raw = document.getElementById('dlUrls').value.trim();
+  if (!raw) { toast('请输入链接'); return; }
+
+  const quality = document.getElementById('dlQuality').value;
+  const urls = raw.split('\n').map(s=>s.trim()).filter(Boolean);
+  const btn = document.getElementById('dlBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 处理中...';
+  document.getElementById('dlStatus').textContent = '⏳ 正在解析...';
+  document.getElementById('dlResult').innerHTML = '';
+  document.getElementById('dlBatchResult').innerHTML = '';
+
+  if (urls.length === 1) {
+    // 单链接：先解析再下载
+    try {
+      const infoRes = await fetch('/api/info', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({url: urls[0], quality}),
+      });
+      const info = await infoRes.json();
+      if (!infoRes.ok) { throw new Error(info.detail); }
+
+      currentInfo = info;
+      document.getElementById('dlStatus').textContent = '✅ 解析成功！开始下载...';
+
+      // 显示视频信息
+      let formats = '';
+      if (info.formats) {
+        formats = info.formats.map(f => 
+          `<option value="${f.format_id}">${f.note} (${f.ext}) ${f.filesize?fmtSize(f.filesize):''}</option>`
+        ).join('');
+      }
+      const infoHtml = `
+        <div class="card v-info">
+          <div class="row"><span class="label">平台</span><span class="value"><span class="platform-tag">${info.platform||'未知'}</span></span></div>
+          <div class="row"><span class="label">标题</span><span class="value">${escHtml(info.title)}</span></div>
+          <div class="row"><span class="label">时长</span><span class="value">${info.duration}</span></div>
+          <div class="row"><span class="label">大小</span><span class="value">${info.size}</span></div>
+          <div class="form-row" style="margin-top:8px">
+            <label>🎯 画质</label>
+            <select id="fmtSelect">${formats||'<option value="b">🔓 最佳画质（自动）</option>'}</select>
+          </div>
+        </div>
+      `;
+      document.getElementById('dlResult').innerHTML = infoHtml;
+
+      // 开始下载
+      const fmt = document.getElementById('fmtSelect')?.value || quality;
+      await doDownload(info.url, fmt);
+    } catch(e) {
+      document.getElementById('dlStatus').textContent = '❌ '+e.message;
+    }
+  } else {
+    // 批量
+    document.getElementById('dlStatus').textContent = `⏳ 批量下载 ${urls.length} 个视频...`;
+    document.getElementById('dlProgress').classList.add('active');
+
+    try {
+      const res = await fetch('/api/batch', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({urls, quality}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail);
+
+      let html = '<div class="card"><div class="v-info">';
+      data.results.forEach((r, i) => {
+        const cls = r.status==='ok' ? 'ok' : 'err';
+        const label = r.status==='ok' ? '✅ 成功' : '❌ 失败';
+        html += `<div class="batch-item"><span class="status-badge ${cls}">${label}</span> ${r.title||r.url||'链接'}`;
+        if (r.size) html += ` <span style="color:#667">${r.size}</span>`;
+        if (r.status!=='ok' && r.message) html += `<br><span style="color:#f5576c;font-size:12px">${escHtml(r.message)}</span>`;
+        html += '</div>';
+      });
+      html += '</div></div>';
+      document.getElementById('dlBatchResult').innerHTML = html;
+      document.getElementById('dlStatus').textContent = '✅ 批量下载完成';
+    } catch(e) {
+      document.getElementById('dlStatus').textContent = '❌ '+e.message;
+    }
+    document.getElementById('dlProgress').classList.remove('active');
+  }
+
+  btn.disabled = false; btn.innerHTML = '⬇️ 解析并下载';
+}
+
+async function doDownload(url, quality) {
+  const fill = document.getElementById('dlProgressFill');
+  document.getElementById('dlProgress').classList.add('active');
+  fill.style.width = '0%';
+
+  let fake = 0;
+  const iv = setInterval(()=>{ if (fake<80) { fake+=Math.random()*6; fill.style.width=Math.min(fake,80)+'%'; } }, 400);
+
+  try {
+    const res = await fetch('/api/download', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url, quality}),
+    });
+    const data = await res.json();
+    clearInterval(iv); fill.style.width = '100%';
+
+    if (!res.ok) { document.getElementById('dlStatus').textContent = '❌ '+(data.detail||'下载失败'); return; }
+
+    document.getElementById('dlStatus').textContent = `✅ 下载完成！${data.size}`;
+
+    // 预览
+    const previewHtml = `
+      <div class="card">
+        <video controls playsinline preload="metadata">
+          <source src="/api/preview/${data.token}" type="video/mp4">
+        </video>
+        <div style="margin-top:10px">
+          <a href="${data.file}" download="${data.filename}" class="btn btn-primary" style="text-decoration:none;display:block;text-align:center">
+            ⬇️ 保存视频 (${data.size})
+          </a>
+        </div>
+      </div>
+    `;
+    document.getElementById('dlResult').innerHTML += previewHtml;
+  } catch(e) {
+    clearInterval(iv);
+    document.getElementById('dlStatus').textContent = '❌ 网络错误';
+  }
+  setTimeout(()=>{ document.getElementById('dlProgress').classList.remove('active'); }, 1500);
+}
+
+// ═══ 历史功能 ═══
+async function loadHistory() {
+  const el = document.getElementById('historyList');
+  el.innerHTML = '<div class="status" style="text-align:center">⏳ 加载中...</div>';
+  try {
+    const res = await fetch('/api/history?limit=50');
+    const data = await res.json();
+    if (!data.items || data.items.length===0) {
+      el.innerHTML = '<div class="empty"><div class="big">📭</div><p>还没有下载记录</p></div>';
+      return;
+    }
+    let html = '<div class="card">';
+    data.items.forEach(item => {
+      const icon = {抖音:'🎵',B站:'📺',YouTube:'▶️',小红书:'📕',快手:'🎬',微博:'📱'} [item.platform] || '🎬';
+      html += `
+        <div class="history-item">
+          <div class="icon">${icon}</div>
+          <div class="info">
+            <div class="title">${escHtml(item.title||'未知')}</div>
+            <div class="meta">
+              <span>${item.platform||'未知'}</span>
+              <span>${item.duration||''}</span>
+              <span>${item.filesize?fmtSize(item.filesize):''}</span>
+              <span>${item.created_at?.slice(0,16)||''}</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-sm btn-outline" onclick="previewFromHistory(${item.id},'${item.token}')">👁️</button>
+            <button class="btn btn-sm btn-outline" onclick="window.open('/api/file/${item.token}')">⬇️</button>
+            <button class="btn btn-sm btn-outline" onclick="deleteHistory(${item.id})">🗑️</button>
+          </div>
+        </div>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="status error">加载失败: '+e.message+'</div>';
+  }
+}
+
+function previewFromHistory(id, token) {
+  switchTab('download');
+  const extra = `
+    <div class="card">
+      <video controls playsinline preload="metadata" style="width:100%;border-radius:10px">
+        <source src="/api/preview/${token}" type="video/mp4">
+      </video>
+    </div>`;
+  document.getElementById('dlResult').innerHTML = extra;
+}
+
+async function deleteHistory(id) {
+  await fetch('/api/history/'+id, {method:'DELETE'});
+  loadHistory();
+  toast('已删除');
+}
+
+// ═══ AI 功能 ═══
+async function loadAiVideoList() {
+  try {
+    const res = await fetch('/api/history?limit=100');
+    const data = await res.json();
+    const sel = document.getElementById('aiVideoSelect');
+    if (!data.items || data.items.length===0) {
+      sel.innerHTML = '<option value="">— 暂无视频，先去下载 —</option>';
+      document.getElementById('aiActions').style.display = 'none';
+      return;
+    }
+    let opts = '<option value="">— 选择视频 —</option>';
+    data.items.forEach(item => {
+      const icon = {抖音:'🎵',B站:'📺',YouTube:'▶️',小红书:'📕'} [item.platform] || '🎬';
+      opts += `<option value="${item.id}">${icon} ${escHtml((item.title||'未知').slice(0,40))}</option>`;
+    });
+    sel.innerHTML = opts;
+    document.getElementById('aiActions').style.display = 'block';
+    document.getElementById('aiStatus').textContent = '选择视频后开始';
+  } catch { /* ignore */ }
+}
+
+async function aiAction(action) {
+  const id = parseInt(document.getElementById('aiVideoSelect').value);
+  if (!id) { toast('请先选择视频'); return; }
+  const api_key = document.getElementById('aiApiKey').value;
+  const base_url = document.getElementById('aiBaseUrl').value || 'https://apihub.agnes-ai.com/v1';
+  const model = document.getElementById('aiModel').value || 'agnes-2.0-flash';
+  const style = document.getElementById('aiStyle').value;
+  const length = document.getElementById('aiLength').value;
+  const text = document.getElementById('aiText').value;
+
+  const fill = document.getElementById('aiProgressFill');
+  document.getElementById('aiProgress').classList.add('active');
+  fill.style.width = '20%';
+
+  const labels = {transcribe:'提取文案', rewrite:'仿写文案', generate:'生成脚本'};
+  document.getElementById('aiStatus').textContent = `⏳ ${labels[action]}中...`;
+  document.getElementById('aiOutput').classList.remove('show');
+  document.getElementById('aiOutput').textContent = '';
+
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({download_id: id, action, api_key, base_url, model, style, length, text}),
+    });
+    fill.style.width = '90%';
+    const data = await res.json();
+    if (!res.ok) { throw new Error(data.detail); }
+
+    if (action === 'transcribe') {
+      document.getElementById('aiText').value = data.text || '';
+      document.getElementById('aiStatus').textContent = '✅ 文案提取完成，可编辑后仿写';
+      toast('文案已提取');
+    } else {
+      document.getElementById('aiOutput').textContent = data.result || data.text || '';
+      document.getElementById('aiOutput').classList.add('show');
+      document.getElementById('aiStatus').textContent = '✅ 生成完成！';
+    }
+  } catch(e) {
+    document.getElementById('aiStatus').textContent = '❌ '+e.message;
+  }
+  fill.style.width = '100%';
+  setTimeout(()=>{ document.getElementById('aiProgress').classList.remove('active'); }, 1000);
+}
+
+// ── 工具 ──
+function escHtml(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
