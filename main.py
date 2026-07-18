@@ -10,9 +10,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ValidationError
 
 # ── 配置 ──
+VERSION = "2.1.0"       # 🏷️ 版本号：每次修改/更新时由 Reasonix 自动递增
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
@@ -83,11 +85,13 @@ def detect_platform(url: str) -> str:
     return "其他"
 
 def extract_url(text: str) -> str | None:
-    """从文本中提取任意视频链接"""
-    # 通用 URL 匹配
+    """从文本中提取任意视频链接，清理多余参数"""
     m = re.search(r'https?://[^\s<>"\']+', text)
     if m:
-        return m.group(0).rstrip("/.,;!?)")
+        url = m.group(0).rstrip("/.,;!?)")
+        # 去掉查询参数（TikTok 等平台带参数会解析失败）
+        url = url.split("?")[0]
+        return url
     return None
 
 def format_size(bytes_val: int) -> str:
@@ -105,8 +109,11 @@ async def run_ytdlp(args: list[str]) -> tuple[int, str, str]:
     stdout, stderr = await proc.communicate()
     return proc.returncode, stdout.decode(), stderr.decode()
 
-def get_cookies_args() -> list[str]:
-    """自动检测本地浏览器 cookies"""
+def get_cookies_args(platform: str = "") -> list[str]:
+    """按平台决定是否需要 cookies"""
+    needs_cookies = ["抖音", "小红书", "快手"]
+    if not any(p in platform for p in needs_cookies):
+        return []
     browsers = [
         ("chrome", "~/Library/Application Support/Google/Chrome"),
         ("brave", "~/Library/Application Support/BraveSoftware/Brave-Browser"),
@@ -135,6 +142,21 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 app = FastAPI(title="视频工具箱", lifespan=lifespan)
+
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request, exc):
+    """捕获参数验证错误，返回详细信息"""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc.errors())},
+    )
+
+@app.exception_handler(ValidationError)
+async def pydantic_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc.errors())},
+    )
 
 # ── 数据模型 ──
 class DownloadRequest(BaseModel):
@@ -168,7 +190,7 @@ async def get_info(req: DownloadRequest):
         raise HTTPException(400, "无法识别链接，请检查后重试")
 
     platform = detect_platform(url)
-    cookies = get_cookies_args()
+    cookies = get_cookies_args(platform)
 
     ret, out, err = await run_ytdlp([
         "--no-playlist", "--no-warnings",
@@ -176,43 +198,70 @@ async def get_info(req: DownloadRequest):
         "--print", "%(duration)s",
         "--print", "%(id)s",
         "--print", "%(ext)s",
-        "--print", "%(filesize_approx)s",
-        "--print", "%(resolution)s",
-        "--print", "%(format_note)s",
     ] + cookies + [url])
 
-    if ret != 0:
-        raise HTTPException(400, f"解析失败: {err[:200]}")
+    if ret != 0 and cookies:
+        # cookies 导致失败时，降级重试
+        ret, out, err = await run_ytdlp([
+            "--no-playlist", "--no-warnings",
+            "--print", "%(title)s",
+            "--print", "%(duration)s",
+            "--print", "%(id)s",
+            "--print", "%(ext)s",
+        ] + [url])
 
     lines = [l.strip() for l in out.strip().split("\n") if l.strip()]
     if len(lines) < 4:
         raise HTTPException(400, "无法获取视频信息")
 
-    title, video_id, ext = lines[0], lines[2], lines[3]
-    duration = int(lines[1]) if lines[1].isdigit() else 0
-    size_str = lines[4] if len(lines) > 4 else ""
-    resolution = lines[5] if len(lines) > 5 else ""
-    format_note = lines[6] if len(lines) > 6 else ""
-
-    mins, secs = divmod(duration, 60) if duration else (0, 0)
-    duration_str = f"{mins}:{secs:02d}" if duration else "未知"
-
-    if size_str and size_str != "NA":
-        try: size_display = format_size(int(size_str))
-        except ValueError: size_display = size_str
-    else:
-        size_display = "解析中..."
-
-    # 获取可用画质列表
+    title = ""
+    video_id = ""
+    ext = "mp4"
+    duration = 0
+    duration_str = "未知"
+    size_display = "未知"
+    resolution = ""
+    format_note = ""
     formats = []
+
+    # 尝试用 --print 获取基本信息
+    ret, out, err = await run_ytdlp([
+        "--no-playlist", "--no-warnings",
+        "--print", "%(title)s",
+        "--print", "%(duration)s",
+        "--print", "%(id)s",
+        "--print", "%(ext)s",
+    ] + cookies + [url])
+
+    if ret == 0:
+        lines = [l.strip() for l in out.strip().split("\n") if l.strip()]
+        if len(lines) >= 4:
+            title, video_id, ext = lines[0], lines[2], lines[3]
+            duration = int(lines[1]) if lines[1].isdigit() else 0
+            mins, secs = divmod(duration, 60) if duration else (0, 0)
+            duration_str = f"{mins}:{secs:02d}" if duration else "未知"
+
+    # 再用 --print json 获取完整信息 + 可用画质列表
     ret2, out2, _ = await run_ytdlp([
         "--no-playlist", "--no-warnings",
-        "-f", "b", "--print", "json",
+        "--print", "json",
     ] + cookies + [url, "--skip-download"])
     if ret2 == 0 and out2.strip():
         try:
             info = json.loads(out2.strip().split("\n")[-1])
-            # 只提取视频流格式
+            if not title: title = info.get("title", title)
+            if not video_id: video_id = info.get("id", video_id)
+            d = info.get("duration", 0)
+            if d and not duration:
+                duration = int(d)
+                mins, secs = divmod(duration, 60)
+                duration_str = f"{mins}:{secs:02d}"
+            ext = info.get("ext", ext)
+            resolution = f"{info.get('height', 0)}p"
+            format_note = info.get("format_note", "")
+            fsize = info.get("filesize", info.get("filesize_approx", 0))
+            if fsize:
+                size_display = format_size(int(fsize))
             for f in info.get("formats", []):
                 vcodec = f.get("vcodec", "")
                 if vcodec and vcodec != "none":
@@ -222,18 +271,14 @@ async def get_info(req: DownloadRequest):
                     filesize = f.get("filesize", f.get("filesize_approx", 0))
                     formats.append({
                         "format_id": f["format_id"],
-                        "ext": ext_f,
-                        "height": height,
+                        "ext": ext_f, "height": height,
                         "note": note or f"{height}p",
-                        "filesize": filesize,
-                        "vcodec": vcodec,
+                        "filesize": filesize, "vcodec": vcodec,
                     })
-            # 按画质排序
             formats.sort(key=lambda x: x["height"], reverse=True)
-            formats = formats[:6]  # 最多显示 6 个
+            formats = formats[:10]
         except: pass
 
-    # 如果没有获取到 formats，提供默认选项
     if not formats:
         formats = [
             {"format_id": "b", "ext": ext, "height": 0, "note": "最佳画质", "filesize": 0, "vcodec": ""},
@@ -241,7 +286,7 @@ async def get_info(req: DownloadRequest):
         ]
 
     return {
-        "title": title,
+        "title": title or "未知标题",
         "duration": duration_str,
         "id": video_id,
         "ext": ext,
@@ -261,7 +306,7 @@ async def download_video(req: DownloadRequest):
         raise HTTPException(400, "无法识别链接")
 
     platform = detect_platform(url)
-    cookies = get_cookies_args()
+    cookies = get_cookies_args(platform)
     token = uuid.uuid4().hex[:12]
     outtmpl = str(DOWNLOADS_DIR / f"{token}_%(title)s_%(id)s.%(ext)s")
 
@@ -275,7 +320,31 @@ async def download_video(req: DownloadRequest):
     ] + cookies + [url])
 
     if ret != 0:
-        raise HTTPException(400, f"下载失败: {err[:300]}")
+        # cookies 导致失败时，降级重试
+        if cookies and ("Unable to extract" in err or "Requested format" not in err):
+            ret, out, err = await run_ytdlp([
+                "--no-playlist", "--no-warnings",
+                "--windows-filenames", "--restrict-filenames",
+                "-f", req.quality,
+                "-o", outtmpl,
+                "--print", "title",
+                "--print", "after_move:filepath",
+            ] + [url])
+
+    if ret != 0:
+        # 如果是指定格式不可用，自动降级到最佳画质重试
+        if "Requested format is not available" in err:
+            ret, out, err = await run_ytdlp([
+                "--no-playlist", "--no-warnings",
+                "--windows-filenames", "--restrict-filenames",
+                "-f", "b",
+                "-o", outtmpl,
+                "--print", "title",
+                "--print", "after_move:filepath",
+            ] + cookies + [url])
+
+        if ret != 0:
+            raise HTTPException(400, f"下载失败: {err[:300]}")
 
     parts = [l.strip() for l in out.strip().split("\n") if l.strip()]
     title = parts[0] if parts else ""
@@ -367,18 +436,26 @@ async def delete_history(item_id: int):
     return {"status": "ok"}
 
 # ── API: AI 仿写制作 ──
-async def transcribe_video(filepath: str, api_key: str, base_url: str = "https://api.openai.com/v1") -> str:
-    """用 Whisper API 转写视频文案"""
-    key = api_key or OPENAI_API_KEY
-    if not key:
-        raise HTTPException(400, "请设置 API Key")
+# 全局缓存 Whisper 模型（只加载一次）
+_whisper_model = None
 
-    # 提取音频为 mp3
-    audio_path = filepath.rsplit(".", 1)[0] + ".mp3"
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        import logging
+        logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
+
+async def transcribe_video(filepath: str) -> str:
+    """用本地 faster-whisper 转写视频文案（无需 API Key）"""
+    # 提取音频为 16kHz wav
+    audio_path = filepath.rsplit(".", 1)[0] + "_temp.wav"
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-i", filepath,
-        "-vn", "-acodec", "libmp3lame", "-ar", "16000",
-        "-ac", "1", "-b:a", "32k", audio_path,
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000",
+        "-ac", "1", audio_path,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -388,22 +465,15 @@ async def transcribe_video(filepath: str, api_key: str, base_url: str = "https:/
         raise HTTPException(500, "音频提取失败")
 
     try:
-        import httpx
-        # 如果 base_url 变了（如 Agnes），Whisper 可能不支持，保持 OpenAI 地址
-        whisper_url = f"{base_url.rstrip('/')}/audio/transcriptions"
-        async with httpx.AsyncClient(timeout=120) as client:
-            with open(audio_path, "rb") as f:
-                files = {"file": ("audio.mp3", f, "audio/mpeg")}
-                data = {"model": "whisper-1", "language": "zh"}
-                resp = await client.post(
-                    whisper_url,
-                    headers={"Authorization": f"Bearer {key}"},
-                    files=files, data=data,
-                )
-            if resp.status_code != 200:
-                raise HTTPException(500, f"转写失败: {resp.text[:200]}")
-            result = resp.json()
-            return result.get("text", "")
+        model = get_whisper_model()
+        loop = asyncio.get_event_loop()
+        segments, info = await loop.run_in_executor(
+            None, lambda: model.transcribe(audio_path, language="zh", beam_size=5)
+        )
+        texts = []
+        for seg in segments:
+            texts.append(seg.text)
+        return "".join(texts)
     finally:
         if os.path.exists(audio_path):
             os.unlink(audio_path)
@@ -441,11 +511,16 @@ async def ai_rewrite(text: str, style: str, length: str, api_key: str, base_url:
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.8,
                 "max_tokens": 1500,
+            "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         if resp.status_code != 200:
             raise HTTPException(500, f"AI 仿写失败: {resp.text[:200]}")
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        result = data["choices"][0]["message"].get("content", "").strip()
+        if not result:
+            result = data["choices"][0]["message"].get("reasoning_content", "").strip()
+        return result
 
 async def ai_generate(title: str, platform: str, style: str, length: str, api_key: str, base_url: str = "https://api.openai.com/v1", model: str = "gpt-4o-mini") -> str:
     """AI 生成同类新脚本"""
@@ -479,11 +554,16 @@ async def ai_generate(title: str, platform: str, style: str, length: str, api_ke
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.9,
                 "max_tokens": 2000,
+            "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         if resp.status_code != 200:
             raise HTTPException(500, f"AI 生成失败: {resp.text[:200]}")
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        result = data["choices"][0]["message"].get("content", "").strip()
+        if not result:
+            result = data["choices"][0]["message"].get("reasoning_content", "").strip()
+        return result
 
 @app.post("/api/ai")
 async def ai_process(req: AIRequest):
@@ -502,7 +582,7 @@ async def ai_process(req: AIRequest):
     if req.action == "transcribe":
         if not os.path.exists(filepath):
             raise HTTPException(400, "视频文件已过期，请重新下载")
-        text = await transcribe_video(filepath, req.api_key, req.base_url)
+        text = await transcribe_video(filepath)
         # 保存转写结果
         conn.execute(
             "INSERT INTO transcripts (download_id, text, model) VALUES (?,?,?)",
@@ -541,6 +621,7 @@ async def ai_process(req: AIRequest):
 @app.get("/api/config")
 async def get_config():
     return {
+        "version": VERSION,
         "has_api_key": bool(OPENAI_API_KEY),
         "platforms": [p[0] for p in PLATFORM_PATTERNS],
     }
@@ -553,7 +634,7 @@ async def health():
 # ── 启动 ──
 if __name__ == "__main__":
     import uvicorn
-    print(f"🚀 视频工具箱已启动")
+    print(f"🚀 视频工具箱 v{VERSION} 已启动")
     print(f"   本地访问: http://localhost:{PORT}")
     print(f"   支持平台: {', '.join(p[0] for p in PLATFORM_PATTERNS)}")
     if OPENAI_API_KEY:
