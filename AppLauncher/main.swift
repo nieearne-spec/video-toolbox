@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 let PORT = 8899
@@ -6,99 +5,80 @@ let SERVICE_DIR = NSString(string: "~/.reasonix/global-workspace/douyin-web").ex
 let PYTHON = NSString(string: "~/.local/venv/yt-dlp/bin/python").expandingTildeInPath
 let MAIN_PY = SERVICE_DIR + "/main.py"
 
-// ── 工具函数 ──
-func isPortInUse(_ port: Int) -> Bool {
+func runCmd(_ args: [String]) -> String {
     let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-    task.arguments = ["-ti", ":\(port)"]
+    task.executableURL = URL(fileURLWithPath: args[0])
+    task.arguments = Array(args.dropFirst())
     let pipe = Pipe()
-    task.standardOutput = pipe; task.standardError = nil
-    guard (try? task.run()) != nil else { return false }
+    task.standardOutput = pipe
+    try? task.run()
     task.waitUntilExit()
-    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+}
+
+func isPortInUse() -> Bool {
+    let out = runCmd(["/usr/sbin/lsof", "-ti", ":\(PORT)"])
     return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }
 
 func stopService() {
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-    task.arguments = ["-ti", ":\(PORT)"]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    guard (try? task.run()) != nil else { return }
-    task.waitUntilExit()
-    let pids = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+    let pids = runCmd(["/usr/sbin/lsof", "-ti", ":\(PORT)"])
         .trimmingCharacters(in: .whitespacesAndNewlines)
-        .components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+        .components(separatedBy: "\n").filter { !$0.isEmpty }
     for pid in pids {
-        let k = Process()
-        k.executableURL = URL(fileURLWithPath: "/bin/kill")
-        k.arguments = ["-9", pid]
-        try? k.run(); k.waitUntilExit()
+        _ = runCmd(["/bin/kill", "-9", pid])
     }
 }
 
-func showAlert(_ msg: String, _ info: String, _ btn1: String, _ btn2: String) -> Bool {
-    let a = NSAlert(); a.messageText = msg; a.informativeText = info
-    a.addButton(withTitle: btn1); a.addButton(withTitle: btn2)
-    return a.runModal() == .alertFirstButtonReturn
+func showDialog(_ msg: String, _ info: String, _ btn1: String, _ btn2: String) -> Bool {
+    let safeInfo = info.replacingOccurrences(of: "\"", with: "\\\"")
+    let script = "display dialog \"\(safeInfo)\" with title \"\(msg)\" buttons {\"\(btn2)\",\"\(btn1)\"}"
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    task.arguments = ["-e", script]
+    try? task.run()
+    task.waitUntilExit()
+    return task.terminationStatus == 0
 }
 
-func showInfo(_ msg: String, _ info: String) {
-    let a = NSAlert(); a.messageText = msg; a.informativeText = info
-    a.addButton(withTitle: "好"); a.runModal()
+func showMsg(_ msg: String, _ info: String) {
+    let safeInfo = info.replacingOccurrences(of: "\"", with: "\\\"")
+    let script = "display dialog \"\(safeInfo)\" with title \"\(msg)\" buttons {\"好\"}"
+    let _ = runCmd(["/usr/bin/osascript", "-e", script])
 }
 
-// ── App Delegate ──
-class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
+func openBrowser(_ url: String) {
+    _ = runCmd(["/usr/bin/open", url])
+}
 
-            if isPortInUse(PORT) {
-                let close = showAlert("🎬 视频工具箱", "服务正在运行 (http://localhost:\(PORT))\n要关闭服务吗？", "关闭服务", "取消")
-                if close {
-                    stopService()
-                    Thread.sleep(forTimeInterval: 0.5)
-                    showInfo("✅ 已关闭", "视频工具箱已停止运行")
-                }
-            } else {
-                self.startService()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
-        }
-    }
-
-    func startService() {
-        // 先清理旧进程
+// ── 主逻辑 ──
+if isPortInUse() {
+    let shouldClose = showDialog("🎬 视频工具箱", "服务正在运行 (http://localhost:\(PORT))\n要关闭服务吗？", "关闭服务", "取消")
+    if shouldClose {
         stopService()
         Thread.sleep(forTimeInterval: 0.5)
+        showMsg("✅ 已关闭", "视频工具箱已停止运行")
+    }
+} else {
+    stopService()
+    Thread.sleep(forTimeInterval: 0.5)
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: PYTHON)
-        task.arguments = [MAIN_PY]
-        task.currentDirectoryURL = URL(fileURLWithPath: SERVICE_DIR)
-        let pipe = Pipe()
-        task.standardOutput = pipe; task.standardError = pipe
-        try? task.run()
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: PYTHON)
+    task.arguments = [MAIN_PY]
+    task.currentDirectoryURL = URL(fileURLWithPath: SERVICE_DIR)
+    try? task.run()
 
-        var started = false
-        for _ in 1...10 {
-            Thread.sleep(forTimeInterval: 1.0)
-            if isPortInUse(PORT) { started = true; break }
-        }
+    var started = false
+    for _ in 1...10 {
+        Thread.sleep(forTimeInterval: 1.0)
+        if isPortInUse() { started = true; break }
+    }
 
-        if started {
-            NSWorkspace.shared.open(URL(string: "http://localhost:\(PORT)")!)
-            showInfo("✅ 已启动", "视频工具箱已启动\nhttp://localhost:\(PORT)")
-        } else {
-            showInfo("❌ 启动失败", "请检查日志:\ncat /tmp/douyin-web-app.log")
-        }
+    if started {
+        openBrowser("http://localhost:\(PORT)")
+        showMsg("✅ 已启动", "视频工具箱已启动\nhttp://localhost:\(PORT)")
+    } else {
+        showMsg("❌ 启动失败", "请查看日志:\ncat /tmp/douyin-web-app.log")
     }
 }
-
-let delegate = AppDelegate()
-NSApp.delegate = delegate
-NSApp.setActivationPolicy(.regular)
-NSApp.run()
